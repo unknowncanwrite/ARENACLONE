@@ -333,6 +333,13 @@ export default function ChatPanel() {
               events.push({ type: 'text', content: `\n\n⚠️ **Error:** ${event.error}` })
               updateEvents(events)
             }
+            else if (event.type === 'preview_started') {
+              events.push({ type: 'text', content: `\n\n🖥️ **Live Preview** started on port ${event.port}! Check the **Live Preview** tab →` })
+              // Auto-switch to preview tab
+              useStore.getState().setRightPanel('preview')
+              useStore.getState().setPreview(true, event.port)
+              updateEvents(events)
+            }
           } catch (e) {}
         }
       }

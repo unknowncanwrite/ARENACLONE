@@ -17,8 +17,15 @@ Create all files and install dependencies. Write complete, working code — neve
 ### 3. 🧪 TEST  
 Run the code, check for errors, fix any issues you find.
 
-### 4. ✅ RESULT
-Summarize what was built and how to use it.
+### 4. 🖥️ PREVIEW
+Start a preview server so the user can see and interact with what you built.
+Use the start_preview tool with port 8080 and the appropriate command.
+For static HTML: "npx serve -s . -l 8080 --no-clipboard"
+For Node.js apps: "node server.js" (make sure it listens on process.env.PORT || 8080)
+For React/Vite: "npx vite --port 8080 --host 0.0.0.0"
+
+### 5. ✅ RESULT
+Summarize what was built. The user can now see it in the Live Preview panel!
 
 ## Communication Style
 - Use emoji headers (🧠 🏗️ 🧪 ✅) to mark each phase
@@ -137,14 +144,30 @@ const TOOLS = [
         required: ['path']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'start_preview',
+      description: 'Start a preview server for the built app. The preview will be shown live in the UI. Use this AFTER building the app to let the user see and interact with it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          port: { type: 'integer', description: 'Port to run the preview on (use 8080)' },
+          command: { type: 'string', description: 'Command to start the app (e.g. "npx serve -s . -l 8080" or "node server.js" or "npx http-server -p 8080")' }
+        },
+        required: ['port', 'command']
+      }
+    }
   }
 ];
 
 class AgentService {
-  constructor(workspaceDir, fileManager, terminalManager) {
+  constructor(workspaceDir, fileManager, terminalManager, previewManager) {
     this.workspaceDir = workspaceDir;
     this.fileManager = fileManager;
     this.terminalManager = terminalManager;
+    this.previewManager = previewManager;
 
     const provider = process.env.ACTIVE_PROVIDER || 'dashscope';
     try {
@@ -240,6 +263,11 @@ class AgentService {
         }
 
         onEvent({ type: 'tool_end', name, result: result.substring(0, 3000) });
+
+        // Emit preview_started event when preview tool runs
+        if (name === 'start_preview') {
+          onEvent({ type: 'preview_started', port: args.port || 8080 });
+        }
 
         history.push({
           role: 'tool',
@@ -349,6 +377,17 @@ class AgentService {
       case 'run_command':
         // Handled by streaming version
         return 'Use streaming version';
+
+      case 'start_preview': {
+        if (this.previewManager) {
+          const result = this.previewManager.start(
+            args.port || 8080,
+            args.command || 'npx serve -s . -l 8080 --no-clipboard'
+          );
+          return `✅ Preview started on port ${result.port} (PID: ${result.pid}). User can view it in the Live Preview panel at /preview/`;
+        }
+        return 'Preview manager not available';
+      }
 
       default:
         return `Unknown tool: ${name}`;

@@ -17,6 +17,11 @@ export const useStore = create((set, get) => ({
   // UI State
   terminalOpen: true,
   sidebarOpen: true,
+  rightPanel: 'editor', // 'editor' | 'preview'
+  
+  // Preview
+  previewRunning: false,
+  previewPort: null,
   
   // Actions
   addMessage: (msg) => set((state) => ({
@@ -66,6 +71,8 @@ export const useStore = create((set, get) => ({
   
   setTerminalOpen: (val) => set({ terminalOpen: val }),
   setSidebarOpen: (val) => set({ sidebarOpen: val }),
+  setRightPanel: (panel) => set({ rightPanel: panel }),
+  setPreview: (running, port) => set({ previewRunning: running, previewPort: port }),
   
   clearMessages: () => set({ messages: [], isStreaming: false }),
 }))

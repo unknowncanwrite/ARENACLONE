@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
-import EditorPanel from './components/EditorPanel'
+import RightPanel from './components/RightPanel'
 import TerminalPanel from './components/TerminalPanel'
 import { useStore } from './store'
 
@@ -51,7 +51,7 @@ export default function App() {
           <div className="flex flex-1 overflow-hidden">
             <ChatPanel />
             <div className="w-px bg-arena-border" />
-            <EditorPanel />
+            <RightPanel />
           </div>
           
           {terminalOpen && (

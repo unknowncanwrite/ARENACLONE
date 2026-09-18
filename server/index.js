@@ -12,6 +12,7 @@ dotenv.config();
 const { AgentService } = require('./services/agent');
 const { TerminalManager } = require('./services/terminal');
 const { FileManager } = require('./services/files');
+const { PreviewManager } = require('./services/preview');
 
 const app = express();
 const server = http.createServer(app);
@@ -32,12 +33,6 @@ server.on('upgrade', (request, socket, head) => {
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Request logging
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
-  next();
-});
-
 // Ensure workspace directory exists
 const WORKSPACE_DIR = path.resolve(process.env.WORKSPACE_DIR || './workspace');
 if (!fs.existsSync(WORKSPACE_DIR)) {
@@ -47,13 +42,86 @@ if (!fs.existsSync(WORKSPACE_DIR)) {
 // Services
 const fileManager = new FileManager(WORKSPACE_DIR);
 const terminalManager = new TerminalManager(WORKSPACE_DIR);
-const agentService = new AgentService(WORKSPACE_DIR, fileManager, terminalManager);
+const previewManager = new PreviewManager(WORKSPACE_DIR);
+const agentService = new AgentService(WORKSPACE_DIR, fileManager, terminalManager, previewManager);
+
+// ==================== Preview Proxy ====================
+// Proxy /preview/* to the running preview server
+
+app.all('/preview', (req, res) => {
+  const status = previewManager.getStatus();
+  if (!status.running) {
+    return res.send(`<!DOCTYPE html><html><head><style>
+      body{background:#0a0a0f;color:#71717a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    </style></head><body><div style="text-align:center">
+      <div style="font-size:48px;margin-bottom:16px">🖥️</div>
+      <h3 style="color:#e4e4e7;margin-bottom:8px">No Preview Running</h3>
+      <p>Ask the agent to build and run something to see a live preview here.</p>
+    </div></body></html>`);
+  }
+  // Redirect /preview to /preview/
+  return res.redirect('/preview/');
+});
+
+app.use('/preview', (req, res) => {
+  const status = previewManager.getStatus();
+  if (!status.running) {
+    return res.status(503).json({ error: 'No preview server running' });
+  }
+
+  const targetUrl = `http://127.0.0.1:${status.port}${req.url.replace(/^\/preview/, '')}`;
+  
+  const proxyReq = http.request(targetUrl, {
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: `127.0.0.1:${status.port}`,
+    },
+  }, (proxyRes) => {
+    // Rewrite Location headers for redirects
+    const headers = { ...proxyRes.headers };
+    if (headers.location) {
+      headers.location = headers.location.replace(
+        `http://127.0.0.1:${status.port}`,
+        `${req.protocol}://${req.get('host')}/preview`
+      );
+    }
+    res.writeHead(proxyRes.statusCode, headers);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error('Preview proxy error:', err.message);
+    res.status(502).json({ error: 'Preview server not responding' });
+  });
+
+  req.pipe(proxyReq);
+});
 
 // ==================== REST API Routes ====================
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', workspace: WORKSPACE_DIR });
+});
+
+// Preview API
+app.get('/api/preview/status', (req, res) => {
+  res.json(previewManager.getStatus());
+});
+
+app.post('/api/preview/start', (req, res) => {
+  try {
+    const { port, command } = req.body;
+    const result = previewManager.start(port || 8080, command || 'npm start');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/preview/stop', (req, res) => {
+  previewManager.stop();
+  res.json({ success: true });
 });
 
 // File operations
@@ -93,15 +161,6 @@ app.post('/api/files/delete', (req, res) => {
   }
 });
 
-app.post('/api/files/rename', (req, res) => {
-  try {
-    fileManager.renameFile(req.body.oldPath, req.body.newPath);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Chat/Agent endpoint (SSE stream)
 app.post('/api/chat', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -109,14 +168,13 @@ app.post('/api/chat', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const { messages, sessionId } = req.body;
-  const session = sessionId || uuidv4();
+  const { messages } = req.body;
 
   try {
-    await agentService.run(messages, session, (event) => {
+    await agentService.run(messages, uuidv4(), (event) => {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     });
-    res.write(`data: ${JSON.stringify({ type: 'done', sessionId: session })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
     res.end();
   } catch (err) {
     console.error('Agent error:', err);
@@ -152,18 +210,9 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (msg) => {
       try {
         const parsed = JSON.parse(msg);
-        if (parsed.type === 'terminal:input') {
-          term.write(parsed.data);
-        } else if (parsed.type === 'terminal:resize') {
-          term.resize(parsed.cols, parsed.rows);
-        }
-      } catch (e) {
-        // ignore
-      }
-    });
-
-    ws.on('close', () => {
-      // Don't destroy terminal on disconnect - user might reconnect
+        if (parsed.type === 'terminal:input') term.write(parsed.data);
+        else if (parsed.type === 'terminal:resize') term.resize(parsed.cols, parsed.rows);
+      } catch (e) {}
     });
   }
 });
@@ -171,46 +220,24 @@ wss.on('connection', (ws, req) => {
 // ==================== Serve Frontend ====================
 
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
-console.log(`📂 Looking for frontend at: ${clientDist}`);
-console.log(`📂 Frontend exists: ${fs.existsSync(clientDist)}`);
+console.log(`📂 Frontend at: ${clientDist} (${fs.existsSync(clientDist) ? 'found' : 'missing'})`);
 
 if (fs.existsSync(clientDist)) {
-  const files = fs.readdirSync(clientDist);
-  console.log(`📂 Frontend files: ${files.join(', ')}`);
-  app.use(express.static(clientDist, {
-    maxAge: '1d',
-    index: 'index.html'
-  }));
+  app.use(express.static(clientDist, { maxAge: '1d', index: 'index.html' }));
 }
 
-// SPA fallback - serve index.html for all non-API routes
+// SPA fallback
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
+  if (req.path.startsWith('/api') || req.path.startsWith('/preview')) {
     return res.status(404).json({ error: 'Not found' });
   }
   
   const indexPath = path.join(clientDist, 'index.html');
   if (fs.existsSync(indexPath)) {
-    console.log(`📄 Serving index.html for ${req.path}`);
-    return res.sendFile(indexPath, (err) => {
-      if (err) {
-        console.error('Error sending index.html:', err);
-        res.status(500).send('Error loading application');
-      }
-    });
+    return res.sendFile(indexPath);
   }
   
-  // Fallback if build doesn't exist
-  console.log('⚠️  Frontend not built, serving fallback page');
-  res.send(`<!DOCTYPE html>
-<html><head><title>Arena Agent Mode</title>
-<style>body{background:#0a0a0f;color:#e4e4e7;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.box{background:#12121a;border:1px solid #1e1e2e;border-radius:12px;padding:40px;max-width:500px;text-align:center}
-h1{color:#6366f1;margin-bottom:16px}code{background:#1a1a2e;padding:2px 8px;border-radius:4px}</style></head>
-<body><div class="box"><h1>⚠️ Frontend Not Built</h1>
-<p>The client needs to be built first.</p>
-<p>Run: <code>cd client && npm install && npm run build</code></p>
-<p>Or redeploy with the correct build command.</p></div></body></html>`);
+  res.send('<h1 style="color:white;text-align:center;margin-top:40vh">Arena Agent Mode - Frontend not built</h1>');
 });
 
 // ==================== Start Server ====================
@@ -220,14 +247,17 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Arena Agent Mode running on http://0.0.0.0:${PORT}`);
   console.log(`📁 Workspace: ${WORKSPACE_DIR}`);
   console.log(`🤖 Provider: ${process.env.ACTIVE_PROVIDER || 'dashscope'}`);
+  console.log(`🖥️  Preview proxy: /preview/ → agent-built apps`);
 });
 
 // Cleanup on exit
 process.on('SIGTERM', () => {
   terminalManager.killAll();
+  previewManager.stop();
   process.exit(0);
 });
 process.on('SIGINT', () => {
   terminalManager.killAll();
+  previewManager.stop();
   process.exit(0);
 });

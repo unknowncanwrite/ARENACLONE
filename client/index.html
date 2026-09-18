@@ -5,9 +5,27 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Arena Agent Mode</title>
+    <style>
+      #loading-screen {
+        position: fixed; inset: 0; background: #0a0a0f; color: #e4e4e7;
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        z-index: 9999; transition: opacity 0.3s;
+      }
+      #loading-screen.hidden { opacity: 0; pointer-events: none; }
+      .loader { width: 40px; height: 40px; border: 3px solid #1e1e2e;
+        border-top-color: #6366f1; border-radius: 50%; animation: spin 1s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
   <body class="bg-arena-bg text-arena-text">
     <div id="root"></div>
+    <div id="loading-screen">
+      <div style="text-align:center">
+        <div class="loader" style="margin:0 auto 16px"></div>
+        <div style="font-size:14px;color:#71717a">Loading Arena Agent Mode...</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

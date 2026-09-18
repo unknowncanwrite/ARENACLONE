@@ -153,14 +153,37 @@ wss.on('connection', (ws, req) => {
 // ==================== Serve Frontend ====================
 
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
+console.log(`📂 Looking for frontend at: ${clientDist}`);
+console.log(`📂 Frontend exists: ${fs.existsSync(clientDist)}`);
+
 if (fs.existsSync(clientDist)) {
+  const files = fs.readdirSync(clientDist);
+  console.log(`📂 Frontend files: ${files.join(', ')}`);
   app.use(express.static(clientDist));
-  app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(clientDist, 'index.html'));
-    }
-  });
 }
+
+// SPA fallback - serve index.html for all non-API routes
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  
+  const indexPath = path.join(clientDist, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  
+  // Fallback if build doesn't exist
+  res.send(`<!DOCTYPE html>
+<html><head><title>Arena Agent Mode</title>
+<style>body{background:#0a0a0f;color:#e4e4e7;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{background:#12121a;border:1px solid #1e1e2e;border-radius:12px;padding:40px;max-width:500px;text-align:center}
+h1{color:#6366f1;margin-bottom:16px}code{background:#1a1a2e;padding:2px 8px;border-radius:4px}</style></head>
+<body><div class="box"><h1>⚠️ Frontend Not Built</h1>
+<p>The client needs to be built first.</p>
+<p>Run: <code>cd client && npm install && npm run build</code></p>
+<p>Or redeploy with the correct build command.</p></div></body></html>`);
+});
 
 // ==================== Start Server ====================
 

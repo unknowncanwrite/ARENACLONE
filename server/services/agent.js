@@ -1,48 +1,50 @@
-const { execSync, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
 
-const SYSTEM_PROMPT = `You are a powerful AI coding agent running inside a sandboxed workspace environment. You help users build, debug, and deploy applications.
+const SYSTEM_PROMPT = `You are a powerful AI coding agent. You build, test, and deploy applications step by step.
 
-You have access to the following tools to interact with the workspace. ALWAYS use tools when you need to read, write, or explore files, or run commands. Never pretend to have done something — actually do it using the tools.
+## Your Workflow
+Always follow this structured approach:
 
-IMPORTANT RULES:
-- Always explore the workspace before making changes
-- Write complete, working code — no placeholders like "// add more here"
-- Explain what you're doing as you go
-- If a command fails, debug it and try again
-- Create files with complete content, never partial
-- When editing files, use write_file with the complete file content
-- Run commands to verify your work (npm install, npm run build, etc.)
+### 1. 🧠 PLAN
+First, briefly outline what you're going to build and how.
+
+### 2. 🏗️ BUILD
+Create all files and install dependencies. Write complete, working code — never placeholders.
+
+### 3. 🧪 TEST  
+Run the code, check for errors, fix any issues you find.
+
+### 4. ✅ RESULT
+Summarize what was built and how to use it.
+
+## Communication Style
+- Use emoji headers (🧠 🏗️ 🧪 ✅) to mark each phase
+- Explain each step as you go
+- Show command output and explain any errors
+- Be concise but thorough
+
+## Rules
+- ALWAYS use tools to actually do the work (don't just describe what to do)
+- Write complete files, never partial
 - Install dependencies before running code
+- Test your work before declaring it done
+- Fix errors immediately when you find them
 `;
 
 const TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'read_file',
-      description: 'Read the contents of a file from the workspace. Returns file content as text.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'File path relative to workspace root' }
-        },
-        required: ['path']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
       name: 'write_file',
-      description: 'Create or overwrite a file in the workspace with the given content. Parent directories are created automatically.',
+      description: 'Create or overwrite a file with complete content.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'File path relative to workspace root' },
-          content: { type: 'string', description: 'The complete file content to write' }
+          path: { type: 'string', description: 'File path relative to workspace' },
+          content: { type: 'string', description: 'Complete file content' }
         },
         required: ['path', 'content']
       }
@@ -51,13 +53,27 @@ const TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'run_command',
-      description: 'Execute a shell command in the workspace directory. Returns stdout and stderr. Use for npm install, git, building, testing, etc.',
+      name: 'read_file',
+      description: 'Read file contents from workspace.',
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: 'The bash command to execute' },
-          timeout: { type: 'integer', description: 'Timeout in seconds (default 30, max 120)' }
+          path: { type: 'string', description: 'File path relative to workspace' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description: 'Execute a shell command. Streams output in real-time.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute' },
+          timeout: { type: 'integer', description: 'Timeout in seconds (default 60, max 180)' }
         },
         required: ['command']
       }
@@ -66,12 +82,12 @@ const TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'list_directory',
-      description: 'List files and directories in the given path (default: workspace root). Shows file sizes and types.',
+      name: 'list_files',
+      description: 'List files and directories.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Directory path relative to workspace root (default: ".")' }
+          path: { type: 'string', description: 'Directory path (default: ".")' }
         },
         required: []
       }
@@ -81,13 +97,13 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'edit_file',
-      description: 'Edit a file by replacing an exact text match with new text. Use for targeted edits without rewriting the whole file.',
+      description: 'Edit a file by replacing exact text match.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'File path relative to workspace root' },
-          old_text: { type: 'string', description: 'The exact text to find and replace' },
-          new_text: { type: 'string', description: 'The replacement text' }
+          path: { type: 'string', description: 'File path' },
+          old_text: { type: 'string', description: 'Exact text to find' },
+          new_text: { type: 'string', description: 'Replacement text' }
         },
         required: ['path', 'old_text', 'new_text']
       }
@@ -96,29 +112,29 @@ const TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'delete_file',
-      description: 'Delete a file or empty directory from the workspace.',
+      name: 'search',
+      description: 'Search for text across workspace files.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'File path relative to workspace root' }
+          pattern: { type: 'string', description: 'Search pattern' },
+          path: { type: 'string', description: 'Directory to search (default: ".")' }
         },
-        required: ['path']
+        required: ['pattern']
       }
     }
   },
   {
     type: 'function',
     function: {
-      name: 'search_files',
-      description: 'Search for a text pattern across files in the workspace using grep. Returns matching lines with file paths.',
+      name: 'delete_file',
+      description: 'Delete a file or directory.',
       parameters: {
         type: 'object',
         properties: {
-          pattern: { type: 'string', description: 'Text or regex pattern to search for' },
-          path: { type: 'string', description: 'Directory to search in (default: workspace root)' }
+          path: { type: 'string', description: 'Path to delete' }
         },
-        required: ['pattern']
+        required: ['path']
       }
     }
   }
@@ -130,7 +146,6 @@ class AgentService {
     this.fileManager = fileManager;
     this.terminalManager = terminalManager;
 
-    // Initialize OpenAI-compatible client
     const provider = process.env.ACTIVE_PROVIDER || 'dashscope';
     try {
       if (provider === 'xkiro') {
@@ -146,159 +161,194 @@ class AgentService {
         });
         this.model = 'qwen-plus';
       }
+      console.log(`🤖 LLM: ${provider} / ${this.model}`);
     } catch (err) {
-      console.error('Failed to initialize LLM client:', err.message);
+      console.error('Failed to init LLM:', err.message);
       this.client = null;
     }
   }
 
   async run(messages, sessionId, onEvent) {
-    const conversationHistory = [
-      { role: 'system', content: SYSTEM_PROMPT + `\n\nCurrent workspace directory: ${this.workspaceDir}` },
+    if (!this.client) {
+      onEvent({ type: 'error', error: 'LLM not configured. Set API keys.' });
+      return;
+    }
+
+    const history = [
+      { role: 'system', content: SYSTEM_PROMPT + `\n\nWorkspace: ${this.workspaceDir}\nDate: ${new Date().toISOString()}` },
       ...messages
     ];
 
     let iterations = 0;
-    const MAX_ITERATIONS = 25;
+    const MAX = 30;
 
-    while (iterations < MAX_ITERATIONS) {
+    onEvent({ type: 'phase', phase: 'thinking', message: '🧠 Analyzing your request...' });
+
+    while (iterations < MAX) {
       iterations++;
 
       let response;
       try {
-        if (!this.client) {
-          onEvent({ type: 'error', error: 'LLM client not initialized. Check your API keys in .env' });
-          return;
-        }
         response = await this.client.chat.completions.create({
           model: this.model,
-          messages: conversationHistory,
+          messages: history,
           tools: TOOLS,
           tool_choice: 'auto',
           temperature: 0.1,
           max_tokens: 4096,
         });
       } catch (err) {
-        console.error('LLM API error:', err.message);
-        onEvent({ type: 'error', error: `LLM API error: ${err.message}` });
+        console.error('LLM error:', err.message);
+        onEvent({ type: 'error', error: `API Error: ${err.message}` });
         return;
       }
 
-      const choice = response.choices[0];
-      const assistantMessage = choice.message;
+      const msg = response.choices[0].message;
 
-      // Stream the text content
-      if (assistantMessage.content) {
-        onEvent({ type: 'assistant', content: assistantMessage.content });
-      }
-
-      // If no tool calls, we're done
-      if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-        break;
-      }
-
-      // Add assistant message to history
-      conversationHistory.push(assistantMessage);
-
-      // Process tool calls
-      for (const toolCall of assistantMessage.tool_calls) {
-        const fnName = toolCall.function.name;
-        let fnArgs;
-        try {
-          fnArgs = JSON.parse(toolCall.function.arguments);
-        } catch (e) {
-          fnArgs = {};
+      // Stream text content
+      if (msg.content) {
+        // Detect phase changes
+        if (msg.content.includes('🏗️') || msg.content.includes('BUILD')) {
+          onEvent({ type: 'phase', phase: 'building', message: '🏗️ Building...' });
+        } else if (msg.content.includes('🧪') || msg.content.includes('TEST')) {
+          onEvent({ type: 'phase', phase: 'testing', message: '🧪 Testing...' });
+        } else if (msg.content.includes('✅') || msg.content.includes('RESULT')) {
+          onEvent({ type: 'phase', phase: 'done', message: '✅ Complete!' });
         }
+        onEvent({ type: 'text', content: msg.content });
+      }
 
-        onEvent({ type: 'tool_call', name: fnName, args: fnArgs });
+      // No tool calls = done
+      if (!msg.tool_calls || msg.tool_calls.length === 0) break;
+
+      history.push(msg);
+
+      // Execute tool calls
+      for (const call of msg.tool_calls) {
+        const name = call.function.name;
+        let args;
+        try { args = JSON.parse(call.function.arguments); } catch { args = {}; }
+
+        onEvent({ type: 'tool_start', name, args });
 
         let result;
-        try {
-          result = await this.executeTool(fnName, fnArgs);
-        } catch (err) {
-          result = `Error: ${err.message}`;
+        if (name === 'run_command') {
+          // Stream command output in real-time
+          result = await this.runCommandStreaming(args, onEvent);
+        } else {
+          result = await this.executeTool(name, args);
         }
 
-        onEvent({ type: 'tool_result', name: fnName, result: result.substring(0, 2000) });
+        onEvent({ type: 'tool_end', name, result: result.substring(0, 3000) });
 
-        conversationHistory.push({
+        history.push({
           role: 'tool',
-          tool_call_id: toolCall.id,
-          content: result.substring(0, 8000), // Limit result size
+          tool_call_id: call.id,
+          content: result.substring(0, 8000),
         });
       }
     }
 
-    if (iterations >= MAX_ITERATIONS) {
-      onEvent({ type: 'assistant', content: '\n\n⚠️ Reached maximum iterations. Please continue the conversation to proceed.' });
+    if (iterations >= MAX) {
+      onEvent({ type: 'text', content: '\n\n⚠️ Max iterations reached. Ask me to continue.' });
     }
+
+    onEvent({ type: 'phase', phase: 'done', message: '✅ Done!' });
+  }
+
+  async runCommandStreaming(args, onEvent) {
+    const timeout = Math.min((args.timeout || 60) * 1000, 180000);
+    const command = args.command;
+
+    onEvent({ type: 'command_start', command });
+
+    return new Promise((resolve) => {
+      const proc = spawn('bash', ['-c', command], {
+        cwd: this.workspaceDir,
+        env: { ...process.env, FORCE_COLOR: '0' },
+      });
+
+      let output = '';
+      let lastStream = Date.now();
+
+      const streamOutput = (data) => {
+        output += data;
+        // Throttle streaming to every 100ms
+        const now = Date.now();
+        if (now - lastStream > 100) {
+          onEvent({ type: 'command_output', data: data.toString() });
+          lastStream = now;
+        }
+      };
+
+      proc.stdout.on('data', (d) => streamOutput(d.toString()));
+      proc.stderr.on('data', (d) => streamOutput(d.toString()));
+
+      const timer = setTimeout(() => {
+        proc.kill('SIGTERM');
+        output += '\n[timeout]';
+      }, timeout);
+
+      proc.on('close', (code) => {
+        clearTimeout(timer);
+        const finalOutput = output + `\n[exit code: ${code}]`;
+        onEvent({ type: 'command_end', exitCode: code, output: finalOutput.substring(0, 3000) });
+        resolve(finalOutput);
+      });
+
+      proc.on('error', (err) => {
+        clearTimeout(timer);
+        const errMsg = `Error: ${err.message}\n[exit code: 1]`;
+        onEvent({ type: 'command_end', exitCode: 1, output: errMsg });
+        resolve(errMsg);
+      });
+    });
   }
 
   async executeTool(name, args) {
     switch (name) {
-      case 'read_file':
-        return this.fileManager.readFile(args.path);
-
       case 'write_file':
         this.fileManager.writeFile(args.path, args.content);
-        return `Successfully wrote to ${args.path}`;
+        return `✅ Wrote ${args.path} (${args.content.length} bytes)`;
+
+      case 'read_file':
+        return this.fileManager.readFile(args.path);
 
       case 'edit_file': {
         const content = this.fileManager.readFile(args.path);
         if (!content.includes(args.old_text)) {
-          return `Error: Could not find the specified text in ${args.path}`;
+          return `❌ Text not found in ${args.path}`;
         }
-        const newContent = content.replace(args.old_text, args.new_text);
-        this.fileManager.writeFile(args.path, newContent);
-        return `Successfully edited ${args.path}`;
+        const updated = content.replace(args.old_text, args.new_text);
+        this.fileManager.writeFile(args.path, updated);
+        return `✅ Edited ${args.path}`;
       }
 
       case 'delete_file':
         this.fileManager.deleteFile(args.path);
-        return `Successfully deleted ${args.path}`;
+        return `✅ Deleted ${args.path}`;
 
-      case 'list_directory':
+      case 'list_files':
         return this.fileManager.listDir(args.path || '.');
 
-      case 'run_command': {
-        const timeout = Math.min((args.timeout || 30) * 1000, 120000);
-        return new Promise((resolve) => {
-          const proc = spawn('bash', ['-c', args.command], {
-            cwd: this.workspaceDir,
-            env: { ...process.env, PATH: process.env.PATH },
-            timeout,
-          });
-          let stdout = '';
-          let stderr = '';
-          proc.stdout.on('data', (d) => { stdout += d.toString(); });
-          proc.stderr.on('data', (d) => { stderr += d.toString(); });
-          proc.on('close', (code) => {
-            let result = '';
-            if (stdout) result += stdout;
-            if (stderr) result += (result ? '\n' : '') + stderr;
-            result += `\n[exit code: ${code}]`;
-            resolve(result.substring(0, 8000));
-          });
-          proc.on('error', (err) => {
-            resolve(`Error: ${err.message}`);
-          });
-        });
-      }
-
-      case 'search_files': {
+      case 'search': {
         const searchPath = args.path || '.';
         const fullPath = path.join(this.workspaceDir, searchPath);
         try {
+          const { execSync } = require('child_process');
           const result = execSync(
-            `grep -r --include='*' -n "${args.pattern.replace(/"/g, '\\"')}" . 2>/dev/null | head -50`,
+            `grep -rn --include='*' "${args.pattern.replace(/"/g, '\\"')}" . 2>/dev/null | head -50`,
             { cwd: fullPath, encoding: 'utf-8', timeout: 15000 }
           );
           return result || 'No matches found.';
         } catch (err) {
-          if (err.stdout) return err.stdout || 'No matches found.';
-          return `Search error: ${err.message}`;
+          return err.stdout || 'No matches found.';
         }
       }
+
+      case 'run_command':
+        // Handled by streaming version
+        return 'Use streaming version';
 
       default:
         return `Unknown tool: ${name}`;

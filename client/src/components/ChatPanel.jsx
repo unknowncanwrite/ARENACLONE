@@ -1,68 +1,127 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, lazy, Suspense } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useStore } from '../store'
 import { 
   Send, User, Bot, Wrench, CheckCircle2, XCircle, 
   Loader2, Sparkles, FileCode, Terminal, Search, 
-  Pencil, Trash2, FolderOpen, Paperclip
+  Pencil, Trash2, FolderOpen, Brain, Hammer, FlaskConical,
+  Check, ChevronDown, ChevronRight, Play, Square, RotateCcw
 } from 'lucide-react'
 
-function ToolIcon({ name }) {
+// ============ Tool Icon ============
+function ToolIcon({ name, size = 13 }) {
+  const props = { size }
   switch (name) {
-    case 'write_file': return <FileCode size={12} />
-    case 'read_file': return <FolderOpen size={12} />
-    case 'run_command': return <Terminal size={12} />
-    case 'search_files': return <Search size={12} />
-    case 'edit_file': return <Pencil size={12} />
-    case 'delete_file': return <Trash2 size={12} />
-    case 'list_directory': return <FolderOpen size={12} />
-    default: return <Wrench size={12} />
+    case 'write_file': return <FileCode {...props} className="text-green-400" />
+    case 'read_file': return <FolderOpen {...props} className="text-blue-400" />
+    case 'run_command': return <Terminal {...props} className="text-yellow-400" />
+    case 'search': return <Search {...props} className="text-purple-400" />
+    case 'edit_file': return <Pencil {...props} className="text-orange-400" />
+    case 'delete_file': return <Trash2 {...props} className="text-red-400" />
+    case 'list_files': return <FolderOpen {...props} className="text-cyan-400" />
+    default: return <Wrench {...props} className="text-gray-400" />
   }
 }
 
-function ToolCall({ tool, result }) {
-  const [expanded, setExpanded] = useState(false)
-  const isDone = result !== undefined
+// ============ Phase Banner ============
+function PhaseBanner({ phase, message }) {
+  const colors = {
+    thinking: 'from-blue-500/20 to-purple-500/20 border-blue-500/30',
+    building: 'from-amber-500/20 to-orange-500/20 border-amber-500/30',
+    testing: 'from-cyan-500/20 to-teal-500/20 border-cyan-500/30',
+    done: 'from-green-500/20 to-emerald-500/20 border-green-500/30',
+  }
+  const icons = {
+    thinking: <Brain size={14} className="text-blue-400" />,
+    building: <Hammer size={14} className="text-amber-400" />,
+    testing: <FlaskConical size={14} className="text-cyan-400" />,
+    done: <Check size={14} className="text-green-400" />,
+  }
 
   return (
-    <div className="my-2 bg-arena-surface border border-arena-border rounded-lg overflow-hidden text-xs">
+    <div className={`my-3 px-3 py-2 rounded-lg bg-gradient-to-r ${colors[phase] || colors.thinking} border flex items-center gap-2`}>
+      {icons[phase] || icons.thinking}
+      <span className="text-xs font-medium">{message}</span>
+    </div>
+  )
+}
+
+// ============ Command Card (Live Streaming) ============
+function CommandCard({ command, output, exitCode, streaming }) {
+  const [expanded, setExpanded] = useState(true)
+  const outputRef = useRef(null)
+  
+  useEffect(() => {
+    if (outputRef.current && streaming) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight
+    }
+  }, [output, streaming])
+
+  const isSuccess = exitCode === 0
+  const isRunning = streaming && exitCode === undefined
+
+  return (
+    <div className="my-2 rounded-lg border border-arena-border overflow-hidden bg-arena-surface">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-arena-hover transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-arena-hover/50 transition-colors text-left"
       >
-        <ToolIcon name={tool.name} />
-        <span className="font-medium mono">{tool.name}</span>
-        {tool.args?.path && (
-          <span className="text-arena-muted truncate mono">{tool.args.path}</span>
-        )}
-        {tool.args?.command && (
-          <span className="text-arena-muted truncate mono">{tool.args.command}</span>
-        )}
-        <span className="ml-auto">
-          {!isDone ? (
-            <Loader2 size={12} className="animate-spin text-arena-accent" />
-          ) : result?.toString().startsWith('Error') ? (
-            <XCircle size={12} className="text-arena-red" />
-          ) : (
-            <CheckCircle2 size={12} className="text-arena-green" />
+        <Terminal size={13} className="text-yellow-400 flex-shrink-0" />
+        <code className="text-xs mono flex-1 truncate text-arena-text">
+          $ {command}
+        </code>
+        <span className="flex-shrink-0 flex items-center gap-1">
+          {isRunning && <Loader2 size={12} className="animate-spin text-yellow-400" />}
+          {exitCode !== undefined && (
+            isSuccess 
+              ? <CheckCircle2 size={13} className="text-green-400" />
+              : <XCircle size={13} className="text-red-400" />
           )}
+          {expanded ? <ChevronDown size={12} className="text-arena-muted" /> : <ChevronRight size={12} className="text-arena-muted" />}
+        </span>
+      </button>
+      {expanded && output && (
+        <div 
+          ref={outputRef}
+          className="border-t border-arena-border bg-[#0a0a0f] px-3 py-2 max-h-64 overflow-y-auto"
+        >
+          <pre className="mono text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap break-all">
+            {output}
+            {isRunning && <span className="inline-block w-2 h-3 bg-green-400 ml-1 animate-pulse" />}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============ Tool Card ============
+function ToolCard({ name, args, result }) {
+  const [expanded, setExpanded] = useState(false)
+  const isDone = result !== undefined
+  const isError = result?.toString().startsWith('❌') || result?.toString().startsWith('Error')
+
+  return (
+    <div className="my-2 rounded-lg border border-arena-border overflow-hidden bg-arena-surface">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-arena-hover/50 transition-colors text-left"
+      >
+        <ToolIcon name={name} />
+        <span className="text-xs font-medium mono">{name}</span>
+        {args?.path && <span className="text-xs text-arena-muted truncate mono">{args.path}</span>}
+        <span className="ml-auto flex items-center gap-1">
+          {!isDone && <Loader2 size={12} className="animate-spin text-arena-accent" />}
+          {isDone && (isError ? <XCircle size={12} className="text-red-400" /> : <CheckCircle2 size={12} className="text-green-400" />)}
+          {expanded ? <ChevronDown size={12} className="text-arena-muted" /> : <ChevronRight size={12} className="text-arena-muted" />}
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-arena-border">
-          <div className="p-2">
-            <div className="text-arena-muted mb-1">Arguments:</div>
-            <pre className="bg-arena-bg p-2 rounded mono text-[11px] overflow-x-auto max-h-32">
-              {JSON.stringify(tool.args, null, 2)}
+        <div className="border-t border-arena-border px-3 py-2">
+          {isDone && result && (
+            <pre className="mono text-[11px] text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto break-all">
+              {typeof result === 'string' ? result : JSON.stringify(result, null, 2)}
             </pre>
-          </div>
-          {isDone && (
-            <div className="p-2 border-t border-arena-border">
-              <div className="text-arena-muted mb-1">Result:</div>
-              <pre className="bg-arena-bg p-2 rounded mono text-[11px] overflow-x-auto max-h-48 whitespace-pre-wrap">
-                {typeof result === 'string' ? result : JSON.stringify(result, null, 2)}
-              </pre>
-            </div>
           )}
         </div>
       )}
@@ -70,67 +129,101 @@ function ToolCall({ tool, result }) {
   )
 }
 
+// ============ Message Component ============
 function Message({ msg }) {
   const isUser = msg.role === 'user'
-  const toolCalls = msg.toolCalls || []
   
-  // Build tool pairs (call + result)
-  const toolPairs = []
-  for (let i = 0; i < toolCalls.length; i++) {
-    toolPairs.push(toolCalls[i])
-  }
-
-  return (
-    <div className={`flex gap-3 ${isUser ? 'justify-end' : ''} mb-4`}>
-      {!isUser && (
-        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1">
-          <Bot size={14} className="text-white" />
-        </div>
-      )}
-      
-      <div className={`max-w-[85%] ${isUser ? 'order-first' : ''}`}>
-        {isUser ? (
+  if (isUser) {
+    return (
+      <div className="flex gap-3 justify-end mb-4">
+        <div className="max-w-[85%]">
           <div className="bg-arena-accent/20 border border-arena-accent/30 rounded-2xl rounded-br-md px-4 py-2.5">
             <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
           </div>
-        ) : (
-          <div className="bg-arena-surface border border-arena-border rounded-2xl rounded-tl-md px-4 py-3">
-            {msg.content && (
-              <div className="chat-markdown text-sm leading-relaxed">
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
-              </div>
-            )}
-            {toolPairs.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {toolPairs.map((tc, i) => (
-                  <ToolCall key={i} tool={{ name: tc.name, args: tc.args }} result={tc.result} />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {isUser && (
+        </div>
         <div className="w-7 h-7 rounded-lg bg-arena-hover flex items-center justify-center flex-shrink-0 mt-1">
           <User size={14} className="text-arena-text" />
         </div>
-      )}
+      </div>
+    )
+  }
+
+  // Assistant message - render events
+  return (
+    <div className="flex gap-3 mb-4">
+      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1">
+        <Bot size={14} className="text-white" />
+      </div>
+      <div className="max-w-[85%] min-w-0">
+        {msg.events?.map((event, i) => {
+          if (event.type === 'phase') {
+            return <PhaseBanner key={i} phase={event.phase} message={event.message} />
+          }
+          if (event.type === 'text') {
+            return (
+              <div key={i} className="chat-markdown text-sm leading-relaxed my-2">
+                <ReactMarkdown>{event.content}</ReactMarkdown>
+              </div>
+            )
+          }
+          if (event.type === 'command') {
+            return (
+              <CommandCard 
+                key={i} 
+                command={event.command} 
+                output={event.output} 
+                exitCode={event.exitCode}
+                streaming={event.streaming}
+              />
+            )
+          }
+          if (event.type === 'tool') {
+            return (
+              <ToolCard 
+                key={i} 
+                name={event.name} 
+                args={event.args} 
+                result={event.result} 
+              />
+            )
+          }
+          return null
+        })}
+      </div>
     </div>
   )
 }
 
+// ============ Typing Indicator ============
+function TypingIndicator() {
+  return (
+    <div className="flex gap-3 mb-4">
+      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0">
+        <Bot size={14} className="text-white" />
+      </div>
+      <div className="bg-arena-surface border border-arena-border rounded-2xl rounded-tl-md px-4 py-3 flex items-center gap-3">
+        <div className="flex gap-1">
+          <div className="w-2 h-2 bg-arena-accent rounded-full typing-dot" />
+          <div className="w-2 h-2 bg-arena-accent rounded-full typing-dot" />
+          <div className="w-2 h-2 bg-arena-accent rounded-full typing-dot" />
+        </div>
+        <span className="text-xs text-arena-muted">Agent is thinking...</span>
+      </div>
+    </div>
+  )
+}
+
+// ============ Main ChatPanel ============
 export default function ChatPanel() {
-  const { messages, isStreaming, currentResponse, toolCalls, addMessage, setStreaming, 
-          updateCurrentResponse, finalizeResponse, addToolCall, setFileTree } = useStore()
+  const { messages, isStreaming, addMessage, setStreaming, setFileTree } = useStore()
   const [input, setInput] = useState('')
+  const [currentEvents, setCurrentEvents] = useState([])
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
-  const abortRef = useRef(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, currentResponse, toolCalls])
+  }, [messages, currentEvents])
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -146,25 +239,28 @@ export default function ChatPanel() {
     setInput('')
     addMessage({ role: 'user', content: userMsg })
     setStreaming(true)
+    setCurrentEvents([])
 
     const allMessages = [...useStore.getState().messages, { role: 'user', content: userMsg }]
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => ({ role: m.role, content: m.content }))
 
     try {
-      const controller = new AbortController()
-      abortRef.current = controller
-
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: allMessages }),
-        signal: controller.signal,
       })
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let events = []
+
+      const updateEvents = (newEvents) => {
+        events = newEvents
+        setCurrentEvents([...newEvents])
+      }
 
       while (true) {
         const { done, value } = await reader.read()
@@ -179,50 +275,84 @@ export default function ChatPanel() {
           try {
             const event = JSON.parse(line.slice(6))
             
-            if (event.type === 'assistant') {
-              updateCurrentResponse(event.content)
-            } else if (event.type === 'tool_call') {
-              addToolCall({ name: event.name, args: event.args, result: undefined })
-            } else if (event.type === 'tool_result') {
-              const state = useStore.getState()
-              const tcs = [...state.toolCalls]
-              // Find the last matching tool call without result
-              for (let i = tcs.length - 1; i >= 0; i--) {
-                if (tcs[i].name === event.name && tcs[i].result === undefined) {
-                  tcs[i] = { ...tcs[i], result: event.result }
-                  break
+            if (event.type === 'phase') {
+              events.push({ type: 'phase', phase: event.phase, message: event.message })
+              updateEvents(events)
+            }
+            else if (event.type === 'text') {
+              // Merge consecutive text events
+              const last = events[events.length - 1]
+              if (last?.type === 'text') {
+                last.content += event.content
+              } else {
+                events.push({ type: 'text', content: event.content })
+              }
+              updateEvents(events)
+            }
+            else if (event.type === 'command_start') {
+              events.push({ 
+                type: 'command', command: event.command, output: '', 
+                exitCode: undefined, streaming: true 
+              })
+              updateEvents(events)
+            }
+            else if (event.type === 'command_output') {
+              const cmd = [...events].reverse().find(e => e.type === 'command' && e.streaming)
+              if (cmd) {
+                cmd.output += event.data
+                updateEvents(events)
+              }
+            }
+            else if (event.type === 'command_end') {
+              const cmd = [...events].reverse().find(e => e.type === 'command' && e.streaming)
+              if (cmd) {
+                cmd.exitCode = event.exitCode
+                cmd.streaming = false
+                cmd.output = event.output || cmd.output
+                updateEvents(events)
+              }
+            }
+            else if (event.type === 'tool_start') {
+              if (event.name !== 'run_command') {
+                events.push({ 
+                  type: 'tool', name: event.name, args: event.args, result: undefined 
+                })
+                updateEvents(events)
+              }
+            }
+            else if (event.type === 'tool_end') {
+              if (event.name !== 'run_command') {
+                const tool = [...events].reverse().find(e => e.type === 'tool' && e.name === event.name && e.result === undefined)
+                if (tool) {
+                  tool.result = event.result
+                  updateEvents(events)
                 }
               }
-              useStore.setState({ toolCalls: tcs })
-            } else if (event.type === 'error') {
-              updateCurrentResponse(`\n\n⚠️ Error: ${event.error}`)
-            } else if (event.type === 'done') {
-              // Done
             }
-          } catch (e) {
-            // ignore parse errors
-          }
+            else if (event.type === 'error') {
+              events.push({ type: 'text', content: `\n\n⚠️ **Error:** ${event.error}` })
+              updateEvents(events)
+            }
+          } catch (e) {}
         }
       }
 
-      // Finalize - move current response to messages
-      finalizeResponse()
+      // Finalize - save the assistant message with all events
+      addMessage({ role: 'assistant', content: '', events: [...events] })
+      setCurrentEvents([])
       
       // Refresh file tree
-      fetch('/api/files')
-        .then(r => r.json())
-        .then(tree => setFileTree(tree))
-        .catch(() => {})
+      fetch('/api/files').then(r => r.json()).then(tree => setFileTree(tree)).catch(() => {})
     } catch (err) {
       if (err.name !== 'AbortError') {
-        updateCurrentResponse(`\n\n⚠️ Connection error: ${err.message}`)
-        finalizeResponse()
+        const errEvents = [...currentEvents, { type: 'text', content: `\n\n⚠️ Connection error: ${err.message}` }]
+        addMessage({ role: 'assistant', content: '', events: errEvents })
+        setCurrentEvents([])
       }
     } finally {
       setStreaming(false)
-      abortRef.current = null
     }
-  }, [input, isStreaming])
+  }, [input, isStreaming, currentEvents])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -231,36 +361,33 @@ export default function ChatPanel() {
     }
   }
 
-  // Build streaming display
-  const streamingToolCalls = useStore.getState().toolCalls
-
   return (
     <div className="flex-1 flex flex-col min-w-[380px] max-w-[55%]">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 && !isStreaming ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
-            <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center mb-4">
+            <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/20">
               <Sparkles size={28} className="text-white" />
             </div>
             <h2 className="text-xl font-semibold mb-2">Arena Agent Mode</h2>
-            <p className="text-arena-muted text-sm max-w-md">
-              I'm your AI coding agent. I can read, write, and edit files, run commands, 
-              and build entire applications for you. Just tell me what you need!
+            <p className="text-arena-muted text-sm max-w-md mb-6">
+              I build, test, and deliver. Watch me work in real-time — planning, coding, running commands, and testing your applications.
             </p>
-            <div className="mt-6 grid grid-cols-1 gap-2 w-full max-w-sm">
+            <div className="grid grid-cols-2 gap-2 w-full max-w-lg">
               {[
-                'Build a React todo app with dark theme',
-                'Create a Python REST API with FastAPI',
-                'Set up a Next.js blog with MDX',
-                'Make a game in vanilla JavaScript',
-              ].map((suggestion, i) => (
+                { icon: '🌐', text: 'Build a full-stack web app' },
+                { icon: '⚡', text: 'Create a REST API with tests' },
+                { icon: '🎮', text: 'Make a browser game' },
+                { icon: '📊', text: 'Build a data dashboard' },
+              ].map((s, i) => (
                 <button
                   key={i}
-                  onClick={() => setInput(suggestion)}
-                  className="text-left text-xs px-3 py-2.5 bg-arena-surface border border-arena-border rounded-lg hover:bg-arena-hover hover:border-arena-accent/30 transition-colors text-arena-muted hover:text-arena-text"
+                  onClick={() => setInput(s.text)}
+                  className="text-left text-xs px-3 py-3 bg-arena-surface border border-arena-border rounded-lg hover:bg-arena-hover hover:border-arena-accent/30 transition-all"
                 >
-                  {suggestion}
+                  <span className="mr-1">{s.icon}</span>
+                  <span className="text-arena-muted">{s.text}</span>
                 </button>
               ))}
             </div>
@@ -271,44 +398,12 @@ export default function ChatPanel() {
               <Message key={i} msg={msg} />
             ))}
             
-            {/* Streaming response */}
-            {isStreaming && (currentResponse || streamingToolCalls.length > 0) && (
-              <div className="flex gap-3 mb-4">
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1">
-                  <Bot size={14} className="text-white" />
-                </div>
-                <div className="max-w-[85%] bg-arena-surface border border-arena-border rounded-2xl rounded-tl-md px-4 py-3">
-                  {currentResponse && (
-                    <div className="chat-markdown text-sm leading-relaxed">
-                      <ReactMarkdown>{currentResponse}</ReactMarkdown>
-                    </div>
-                  )}
-                  {streamingToolCalls.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {streamingToolCalls.map((tc, i) => (
-                        <ToolCall key={i} tool={{ name: tc.name, args: tc.args }} result={tc.result} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+            {/* Live streaming events */}
+            {isStreaming && currentEvents.length > 0 && (
+              <Message msg={{ role: 'assistant', events: currentEvents }} />
             )}
             
-            {/* Typing indicator */}
-            {isStreaming && !currentResponse && streamingToolCalls.length === 0 && (
-              <div className="flex gap-3 mb-4">
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-                  <Bot size={14} className="text-white" />
-                </div>
-                <div className="bg-arena-surface border border-arena-border rounded-2xl rounded-tl-md px-4 py-3">
-                  <div className="flex gap-1.5">
-                    <div className="w-2 h-2 bg-arena-muted rounded-full typing-dot" />
-                    <div className="w-2 h-2 bg-arena-muted rounded-full typing-dot" />
-                    <div className="w-2 h-2 bg-arena-muted rounded-full typing-dot" />
-                  </div>
-                </div>
-              </div>
-            )}
+            {isStreaming && currentEvents.length === 0 && <TypingIndicator />}
             
             <div ref={messagesEndRef} />
           </>
@@ -323,7 +418,7 @@ export default function ChatPanel() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask the agent to build, edit, or debug..."
+            placeholder="Tell the agent what to build..."
             className="flex-1 bg-transparent resize-none outline-none text-sm placeholder:text-arena-muted min-h-[36px] max-h-[200px]"
             rows={1}
             disabled={isStreaming}
@@ -336,9 +431,17 @@ export default function ChatPanel() {
             <Send size={16} className="text-white" />
           </button>
         </div>
-        <p className="text-[10px] text-arena-muted mt-2 text-center">
-          Agent can read/write files, run commands, and build full applications
-        </p>
+        <div className="flex items-center justify-between mt-2">
+          <p className="text-[10px] text-arena-muted">
+            Agent plans → builds → tests → delivers
+          </p>
+          {isStreaming && (
+            <div className="flex items-center gap-1.5 text-[10px] text-arena-accent">
+              <div className="w-1.5 h-1.5 bg-arena-accent rounded-full animate-pulse" />
+              Live
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -4,8 +4,6 @@ export const useStore = create((set, get) => ({
   // Chat
   messages: [],
   isStreaming: false,
-  currentResponse: '',
-  toolCalls: [],
   
   // Editor
   openFiles: [],
@@ -17,7 +15,6 @@ export const useStore = create((set, get) => ({
   expandedDirs: new Set(),
   
   // UI State
-  activePanel: 'chat',
   terminalOpen: true,
   sidebarOpen: true,
   
@@ -26,22 +23,7 @@ export const useStore = create((set, get) => ({
     messages: [...state.messages, msg]
   })),
   
-  updateCurrentResponse: (text) => set((state) => ({
-    currentResponse: state.currentResponse + text
-  })),
-  
-  finalizeResponse: () => set((state) => ({
-    messages: [...state.messages, { role: 'assistant', content: state.currentResponse, toolCalls: state.toolCalls }],
-    currentResponse: '',
-    toolCalls: [],
-    isStreaming: false,
-  })),
-  
   setStreaming: (val) => set({ isStreaming: val }),
-  
-  addToolCall: (tool) => set((state) => ({
-    toolCalls: [...state.toolCalls, tool]
-  })),
   
   setFileTree: (tree) => set({ fileTree: tree }),
   
@@ -84,7 +66,6 @@ export const useStore = create((set, get) => ({
   
   setTerminalOpen: (val) => set({ terminalOpen: val }),
   setSidebarOpen: (val) => set({ sidebarOpen: val }),
-  setActivePanel: (panel) => set({ activePanel: panel }),
   
-  clearMessages: () => set({ messages: [], currentResponse: '', toolCalls: [], isStreaming: false }),
+  clearMessages: () => set({ messages: [], isStreaming: false }),
 }))

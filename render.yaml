@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install && cd client && npm install && npm run build
-    startCommand: NODE_ENV=production node server/index.js
+    startCommand: node server/index.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

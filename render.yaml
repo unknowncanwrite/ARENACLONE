@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: arena-agent-mode
+    runtime: node
+    plan: free
+    buildCommand: npm install && cd client && npm install && npm run build
+    startCommand: NODE_ENV=production node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: ACTIVE_PROVIDER
+        value: dashscope
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: DASHSCOPE_BASE_URL
+        value: https://ws-8euxjezal8y5x0vi.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+      - key: XKIRO_API_KEY
+        sync: false
+      - key: XKIRO_BASE_URL
+        value: https://api.xkiro.com/v1
+      - key: WORKSPACE_DIR
+        value: /tmp/arena-workspace

@@ -15,10 +15,28 @@ const { FileManager } = require('./services/files');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ noServer: true });
+
+// Handle WebSocket upgrade
+server.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  if (url.pathname === '/ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// Request logging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+  next();
+});
 
 // Ensure workspace directory exists
 const WORKSPACE_DIR = path.resolve(process.env.WORKSPACE_DIR || './workspace');
@@ -159,7 +177,10 @@ console.log(`📂 Frontend exists: ${fs.existsSync(clientDist)}`);
 if (fs.existsSync(clientDist)) {
   const files = fs.readdirSync(clientDist);
   console.log(`📂 Frontend files: ${files.join(', ')}`);
-  app.use(express.static(clientDist));
+  app.use(express.static(clientDist, {
+    maxAge: '1d',
+    index: 'index.html'
+  }));
 }
 
 // SPA fallback - serve index.html for all non-API routes
@@ -170,10 +191,17 @@ app.get('*', (req, res) => {
   
   const indexPath = path.join(clientDist, 'index.html');
   if (fs.existsSync(indexPath)) {
-    return res.sendFile(indexPath);
+    console.log(`📄 Serving index.html for ${req.path}`);
+    return res.sendFile(indexPath, (err) => {
+      if (err) {
+        console.error('Error sending index.html:', err);
+        res.status(500).send('Error loading application');
+      }
+    });
   }
   
   // Fallback if build doesn't exist
+  console.log('⚠️  Frontend not built, serving fallback page');
   res.send(`<!DOCTYPE html>
 <html><head><title>Arena Agent Mode</title>
 <style>body{background:#0a0a0f;color:#e4e4e7;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
